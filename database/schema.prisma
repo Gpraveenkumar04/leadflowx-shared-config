@@ -1,0 +1,88 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../node_modules/.prisma/client"
+}
+
+datasource db {
+provider = "postgresql"
+url      = env("DB_URL")
+}
+
+model RawLead {
+  id        Int      @id @default(autoincrement())
+  email     String   @unique
+  name      String
+  company   String
+  website   String
+  phone     String
+  createdAt DateTime @default(now()) @map("created_at")
+  correlationId String @map("correlation_id")
+
+  @@map("raw_leads")
+}
+
+model VerifiedLead {
+  id            Int      @id @default(autoincrement())
+  email         String   @unique
+  name          String
+  company       String
+  website       String
+  phone         String
+  correlationId String   @map("correlation_id")
+  createdAt     DateTime @default(now()) @map("created_at")
+  auditScore    Int?     @map("audit_score")
+  leadScore     Int?     @map("lead_score")
+  qaStatus      String?  @map("qa_status") // 'pending', 'approved', 'rejected'
+  qaReviewedAt  DateTime? @map("qa_reviewed_at")
+  qaReviewedBy  String?  @map("qa_reviewed_by")
+
+  @@map("verified_leads")
+}
+
+model AuditResult {
+  id            Int      @id @default(autoincrement())
+  correlationId String   @map("correlation_id")
+  website       String
+  auditScore    Int      @map("audit_score")
+  performance   Float
+  seo           Float
+  ssl           Float
+  mobile        Float
+  auditData     Json     @map("audit_data") // Store complete audit response
+  timestamp     DateTime @default(now())
+  error         String?
+
+  @@map("audit_results")
+}
+
+model DlqLead {
+  id            Int      @id @default(autoincrement())
+  email         String
+  name          String?
+  company       String
+  website       String
+  phone         String
+  correlationId String @map("correlation_id")
+  error         String
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@map("dlq_leads")
+}
+
+model ScoringJob {
+  id        Int      @id @default(autoincrement())
+  jobDate   DateTime @map("job_date")
+  status    String   // 'running', 'completed', 'failed'
+  leadsProcessed Int @map("leads_processed")
+  startTime DateTime @map("start_time")
+  endTime   DateTime? @map("end_time")
+  error     String?
+
+  @@map("scoring_jobs")
+}
+
+model Config {
+  id    Int    @id @default(autoincrement())
+  key   String @unique
+  value String?
+}

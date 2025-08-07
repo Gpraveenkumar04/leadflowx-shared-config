@@ -1,0 +1,659 @@
+version: '3.8'
+
+services:
+  # ====================================================
+  # INFRASTRUCTURE SERVICES
+  # ====================================================
+  
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: leadflowx-postgres
+    environment:
+      POSTGRES_DB: leadflowx
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./migrations.sql:/docker-entrypoint-initdb.d/01-init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: leadflowx-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # Zookeeper for Kafka
+  zookeeper:
+    image: bitnami/zookeeper:latest
+    container_name: leadflowx-zookeeper
+    environment:
+      - ALLOW_ANONYMOUS_LOGIN=yes
+      - ZOO_SERVER_ID=1
+      - ZOO_TICK_TIME=2000
+    ports:
+      - "2181:2181"
+    volumes:
+      - zookeeper_data:/bitnami/zookeeper
+    healthcheck:
+      test: ["CMD-SHELL", "echo ruok | nc localhost 2181"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # Kafka Message Queue
+  kafka:
+    image: bitnami/kafka:3.5.1
+    container_name: leadflowx-kafka
+    environment:
+      - KAFKA_BROKER_ID=1
+      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT_HOST://localhost:9092,PLAINTEXT_DOCKER://kafka:9093
+      - KAFKA_CFG_LISTENERS=PLAINTEXT_HOST://:9092,PLAINTEXT_DOCKER://:9093
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT_HOST:PLAINTEXT,PLAINTEXT_DOCKER:PLAINTEXT
+      - KAFKA_CFG_INTER_BROKER_LISTENER_NAME=PLAINTEXT_DOCKER
+      - KAFKA_CFG_ZOOKEEPER_CONNECT=zookeeper:2181
+      - ALLOW_PLAINTEXT_LISTENER=yes
+      - KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true
+      - KAFKA_CFG_LOG_RETENTION_HOURS=168
+    ports:
+      - "9092:9092"
+    volumes:
+      - kafka_data:/bitnami/kafka
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions.sh --bootstrap-server localhost:9092"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+    restart: unless-stopped
+
+  # ====================================================
+  # CORE APPLICATION SERVICES
+  # ====================================================
+
+  # 1. Scheduler Service
+  scheduler:
+    build: ./scheduler
+    container_name: leadflowx-scheduler
+    environment:
+      - DB_URL=postgresql://postgres:postgres@postgres:5432/leadflowx
+      - KAFKA_BROKER=kafka:9093
+      - KAFKA_TOPIC=scraping.jobs
+      - SCHEDULE_INTERVAL=30
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles: ["scheduler"]
+
+  # 2. Scraper Workers (14 individual services)
+  scraper-yelp:
+    build: ./scraper
+    container_name: leadflowx-scraper-yelp
+    environment:
+      - SOURCE=yelp
+      - KAFKA_BROKER=kafka:9093
+      - KAFKA_INPUT_TOPIC=scraping.jobs
+      - KAFKA_OUTPUT_TOPIC=lead.raw
+      - DB_URL=postgresql://postgres:postgres@postgres:5432/leadflowx
+      - CAPSOLVER_KEY=${CAPSOLVER_KEY}
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: on-failure
+
+  scraper-etsy:
+    build: ./scraper
+    container_name: leadflowx-scraper-etsy
+    environment:
+      - SOURCE=etsy
+      - KAFKA_BROKER=kafka:9093
+      - KAFKA_INPUT_TOPIC=scraping.jobs
+      - KAFKA_OUTPUT_TOPIC=lead.raw
+      - CAPSOLVER_KEY=${CAPSOLVER_KEY}
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: on-failure
+
+  scraper-craigslist:
+    build: ./scraper
+    container_name: leadflowx-scraper-craigslist
+    environment:
+      - SOURCE=craigslist
+      - KAFKA_BROKER=kafka:9093
+      - KAFKA_INPUT_TOPIC=scraping.jobs
+      - KAFKA_OUTPUT_TOPIC=lead.raw
+      - CAPSOLVER_KEY=${CAPSOLVER_KEY}
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: on-failure
+
+  scraper-google-maps:
+    build: ./scraper
+    container_name: leadflowx-scraper-google-maps
+    environment:
+      - SOURCE=google_maps
+      - KAFKA_BROKER=kafka:9093
+      - KAFKA_INPUT_TOPIC=scraping.jobs
+      - KAFKA_OUTPUT_TOPIC=lead.raw
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: on-failure
+
+  scraper-yellowpages:
+    build: ./scraper
+    container_name: leadflowx-scraper-yellowpages
+    environment:
+      - SOURCE=yellowpages
+      - KAFKA_BROKER=kafka:9093
+      - KAFKA_INPUT_TOPIC=scraping.jobs
+      - KAFKA_OUTPUT_TOPIC=lead.raw
+      - CAPSOLVER_KEY=${CAPSOLVER_KEY}
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: on-failure
+
+  scraper-linkedin:
+    build: ./scraper
+    container_name: leadflowx-scraper-linkedin
+    environment:
+      - SOURCE=linkedin
+      - KAFKA_BROKER=kafka:9093
+      - KAFKA_INPUT_TOPIC=scraping.jobs
+      - KAFKA_OUTPUT_TOPIC=lead.raw
+      - CAPSOLVER_KEY=${CAPSOLVER_KEY}
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: on-failure
+
+  scraper-chamber:
+    build: ./scraper
+    container_name: leadflowx-scraper-chamber
+    environment:
+      - SOURCE=chamber
+      - KAFKA_BROKER=kafka:9093
+      - KAFKA_INPUT_TOPIC=scraping.jobs
+      - KAFKA_OUTPUT_TOPIC=lead.raw
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: on-failure
+
+  scraper-facebook:
+    build: ./scraper
+    container_name: leadflowx-scraper-facebook
+    environment:
+      - SOURCE=facebook
+      - KAFKA_BROKER=kafka:9093
+      - KAFKA_INPUT_TOPIC=scraping.jobs
+      - KAFKA_OUTPUT_TOPIC=lead.raw
+      - CAPSOLVER_KEY=${CAPSOLVER_KEY}
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: on-failure
+
+  scraper-opendata:
+    build: ./scraper
+    container_name: leadflowx-scraper-opendata
+    environment:
+      - SOURCE=opendata
+      - KAFKA_BROKER=kafka:9093
+      - KAFKA_INPUT_TOPIC=scraping.jobs
+      - KAFKA_OUTPUT_TOPIC=lead.raw
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: on-failure
+
+  scraper-trade:
+    build: ./scraper
+    container_name: leadflowx-scraper-trade
+    environment:
+      - SOURCE=trade
+      - KAFKA_BROKER=kafka:9093
+      - KAFKA_INPUT_TOPIC=scraping.jobs
+      - KAFKA_OUTPUT_TOPIC=lead.raw
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: on-failure
+
+  scraper-reviews:
+    build: ./scraper
+    container_name: leadflowx-scraper-reviews
+    environment:
+      - SOURCE=reviews
+      - KAFKA_BROKER=kafka:9093
+      - KAFKA_INPUT_TOPIC=scraping.jobs
+      - KAFKA_OUTPUT_TOPIC=lead.raw
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: on-failure
+
+  scraper-whois:
+    build: ./scraper
+    container_name: leadflowx-scraper-whois
+    environment:
+      - SOURCE=whois
+      - KAFKA_BROKER=kafka:9093
+      - KAFKA_INPUT_TOPIC=scraping.jobs
+      - KAFKA_OUTPUT_TOPIC=lead.raw
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: on-failure
+
+  scraper-noweblist:
+    build: ./scraper
+    container_name: leadflowx-scraper-noweblist
+    environment:
+      - SOURCE=noweblist
+      - KAFKA_BROKER=kafka:9093
+      - KAFKA_INPUT_TOPIC=scraping.jobs
+      - KAFKA_OUTPUT_TOPIC=lead.raw
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: on-failure
+
+  scraper-classifieds:
+    build: ./scraper
+    container_name: leadflowx-scraper-classifieds
+    environment:
+      - SOURCE=classifieds
+      - KAFKA_BROKER=kafka:9093
+      - KAFKA_INPUT_TOPIC=scraping.jobs
+      - KAFKA_OUTPUT_TOPIC=lead.raw
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: on-failure
+
+  # 3. Deduplicator Service
+  deduplicator:
+    build: ./deduplicator
+    container_name: leadflowx-deduplicator
+    environment:
+      - KAFKA_BROKER=kafka:9093
+      - KAFKA_INPUT_TOPIC=lead.raw
+      - KAFKA_OUTPUT_TOPIC=lead.deduplicated
+      - DB_URL=postgresql://postgres:postgres@postgres:5432/leadflowx
+      - DEDUP_ALGORITHM=fuzzy_matching
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles: ["dedup"]
+
+  # 4. Auditor Service
+  auditor:
+    build: ./auditor
+    container_name: leadflowx-auditor
+    environment:
+      - KAFKA_BROKER=kafka:9093
+      - KAFKA_INPUT_TOPIC=lead.deduplicated
+      - KAFKA_OUTPUT_TOPIC=lead.audited
+      - KAFKA_GROUP_ID=auditor-group
+      - PAGESPEED_API_KEY=${PAGESPEED_API_KEY}
+      - SSL_CHECK_ENABLED=true
+      - SEO_CHECK_ENABLED=true
+      - MOBILE_CHECK_ENABLED=true
+    ports:
+      - "8081:8081"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8081/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # 5. QA Workflow (Activepieces)
+  activepieces:
+    image: activepieces/activepieces:0.14.0
+    container_name: leadflowx-qa-workflow
+    environment:
+      - AP_POSTGRES_DATABASE=leadflowx
+      - AP_POSTGRES_HOST=postgres
+      - AP_POSTGRES_PORT=5432
+      - AP_POSTGRES_USERNAME=postgres
+      - AP_POSTGRES_PASSWORD=postgres
+      - AP_REDIS_HOST=redis
+      - AP_REDIS_PORT=6379
+      - AP_ENCRYPTION_KEY=${AP_ENCRYPTION_KEY}
+      - AP_JWT_SECRET=${AP_JWT_SECRET}
+      - AP_FRONTEND_URL=http://localhost:3001
+      - AP_WEBHOOK_TIMEOUT_SECONDS=30
+    ports:
+      - "3001:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - activepieces_data:/usr/src/app/packages/server/dist
+    restart: unless-stopped
+
+  # 6. Scorer Cron Service
+  scorer:
+    build: ./scorer
+    container_name: leadflowx-scorer
+    environment:
+      - DB_URL=postgresql://postgres:postgres@postgres:5432/leadflowx
+      - CRON_SCHEDULE=0 2 * * *  # Run at 2 AM daily
+      - SCORING_WEIGHTS=page_speed:0.3,ssl_score:0.2,lead_quality:0.5
+      - BATCH_SIZE=1000
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # 7. CRM Adapter Service
+  crm-adapter:
+    build: ./crm-adapter
+    container_name: leadflowx-crm-adapter
+    environment:
+      - KAFKA_BROKER=kafka:9093
+      - KAFKA_INPUT_TOPIC=lead.scored
+      - ESPOCRM_URL=${ESPOCRM_URL}
+      - ESPOCRM_API_KEY=${ESPOCRM_API_KEY}
+      - SYNC_INTERVAL=300  # 5 minutes
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles: ["crm"]
+
+  # 8. Emailer Service
+  emailer:
+    build: ./emailer
+    container_name: leadflowx-emailer
+    environment:
+      - LISTMONK_URL=${LISTMONK_URL}
+      - LISTMONK_USERNAME=${LISTMONK_USERNAME}
+      - LISTMONK_PASSWORD=${LISTMONK_PASSWORD}
+      - KAFKA_BROKER=kafka:9093
+      - KAFKA_INPUT_TOPIC=lead.qualified
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles: ["email"]
+
+  # 9. Dialer Service (Wazo WebRTC)
+  dialer:
+    build: ./dialer
+    container_name: leadflowx-dialer
+    environment:
+      - WAZO_HOST=${WAZO_HOST}
+      - WAZO_USERNAME=${WAZO_USERNAME}
+      - WAZO_PASSWORD=${WAZO_PASSWORD}
+      - WEBRTC_PORT=8443
+    ports:
+      - "8443:8443"
+    restart: unless-stopped
+    profiles: ["dialer"]
+
+  # 10. Admin UI (React + Refine.dev)
+  admin-ui:
+    build: ./admin-ui
+    container_name: leadflowx-admin-ui
+    environment:
+      - REACT_APP_API_URL=http://localhost:8080
+      - REACT_APP_WS_URL=ws://localhost:8080
+      - REACT_APP_ACTIVEPIECES_URL=http://localhost:3001
+    ports:
+      - "3000:3000"
+    depends_on:
+      - ingestion-api
+    restart: unless-stopped
+
+  # 11. Config Service
+  config-service:
+    build: ./config-service
+    container_name: leadflowx-config-service
+    environment:
+      - DB_URL=postgresql://postgres:postgres@postgres:5432/leadflowx
+      - REDIS_URL=redis://redis:6379
+      - HOT_RELOAD_ENABLED=true
+    ports:
+      - "8082:8082"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # 15. Dead Letter Handler
+  dead-letter-handler:
+    build: ./dead-letter-handler
+    container_name: leadflowx-dead-letter-handler
+    environment:
+      - KAFKA_BROKER=kafka:9093
+      - KAFKA_DLQ_TOPIC=dead.letters
+      - RETRY_ATTEMPTS=3
+      - RETRY_DELAY=60  # 1 minute
+      - ALERT_WEBHOOK=${ALERT_WEBHOOK_URL}
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ====================================================
+  # API GATEWAY & INGESTION
+  # ====================================================
+
+  # Ingestion API
+  ingestion-api:
+    build: ./ingestion-api
+    container_name: leadflowx-ingestion-api
+    environment:
+      - DB_URL=postgresql://postgres:postgres@postgres:5432/leadflowx
+      - KAFKA_BROKER=kafka:9093
+      - API_KEY=${API_KEY}
+      - CORS_ORIGINS=http://localhost:3000,http://localhost:3002
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # Verifier Service
+  verifier:
+    build: ./verifier
+    container_name: leadflowx-verifier
+    environment:
+      - KAFKA_BROKER=kafka:9093
+      - KAFKA_INPUT_TOPIC=lead.raw
+      - KAFKA_OUTPUT_TOPIC=lead.verified
+      - KAFKA_GROUP_ID=verifier-group
+      - VERIFICATION_RULES=email,phone,website
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ====================================================
+  # MONITORING & OBSERVABILITY
+  # ====================================================
+
+  # 12. Prometheus (Metrics Collection)
+  prometheus:
+    image: prom/prometheus:v2.47.0
+    container_name: leadflowx-prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./monitoring/prometheus/alert_rules.yml:/etc/prometheus/alert_rules.yml
+      - prometheus_data:/prometheus
+    restart: unless-stopped
+
+  # 13. Grafana (Dashboards)
+  grafana:
+    image: grafana/grafana:10.1.0
+    container_name: leadflowx-grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin123
+      - GF_USERS_ALLOW_SIGN_UP=false
+    ports:
+      - "3003:3000"
+    volumes:
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+  # 14. Jaeger (Distributed Tracing)
+  jaeger:
+    image: jaegertracing/all-in-one:1.49
+    container_name: leadflowx-jaeger
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+      - COLLECTOR_ZIPKIN_HOST_PORT=:9411
+    ports:
+      - "5775:5775/udp"
+      - "6831:6831/udp"
+      - "6832:6832/udp"
+      - "5778:5778"
+      - "16686:16686"  # Jaeger UI
+      - "14250:14250"
+      - "14268:14268"
+      - "14269:14269"
+      - "9411:9411"    # Zipkin
+    volumes:
+      - jaeger_data:/tmp
+    restart: unless-stopped
+
+  # ====================================================
+  # ADDITIONAL WORKFLOW TOOLS
+  # ====================================================
+
+  # N8N Workflow Automation
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: leadflowx-n8n
+    environment:
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=admin
+      - N8N_BASIC_AUTH_PASSWORD=admin123
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=leadflowx
+      - DB_POSTGRESDB_USER=postgres
+      - DB_POSTGRESDB_PASSWORD=postgres
+    ports:
+      - "5678:5678"
+    volumes:
+      - n8n_data:/home/node/.n8n
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # QA UI for manual review
+  qa-ui:
+    build: ./qa-ui
+    container_name: leadflowx-qa-ui
+    environment:
+      - REACT_APP_API_URL=http://localhost:8080
+      - REACT_APP_WS_URL=ws://localhost:8080
+    ports:
+      - "3002:3000"
+    depends_on:
+      - ingestion-api
+    restart: unless-stopped
+
+# ====================================================
+# VOLUMES
+# ====================================================
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  kafka_data:
+    driver: local
+  zookeeper_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+  jaeger_data:
+    driver: local
+  n8n_data:
+    driver: local
+  activepieces_data:
+    driver: local
+
+# ====================================================
+# NETWORKS
+# ====================================================
+networks:
+  default:
+    name: leadflowx-network
+    driver: bridge
+
+# ====================================================
+# PROFILES FOR SELECTIVE DEPLOYMENT
+# ====================================================
+# Use: docker-compose --profile core up -d
+# Available profiles: core, scrapers, monitoring, workflows, crm, email, dialer

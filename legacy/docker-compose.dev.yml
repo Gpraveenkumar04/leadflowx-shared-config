@@ -1,0 +1,343 @@
+services:
+  kafka:
+    image: bitnami/kafka:3.3.2
+    init: true # Ensure proper signal handling and process reaping
+    environment:
+      - KAFKA_BROKER_ID=1
+      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT_LOCAL://localhost:9092,PLAINTEXT_DOCKER://kafka:9093
+      - KAFKA_CFG_LISTENERS=PLAINTEXT_LOCAL://:9092,PLAINTEXT_DOCKER://:9093
+      - KAFKA_CFG_ZOOKEEPER_CONNECT=zookeeper:2181
+      - ALLOW_PLAINTEXT_LISTENER=yes
+      - KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true
+      - KAFKA_CFG_LOG_RETENTION_HOURS=168
+      - KAFKA_CFG_LOG_SEGMENT_BYTES=1073741824
+      - KAFKA_CFG_LOG_RETENTION_CHECK_INTERVAL_MS=300000
+      - KAFKA_CFG_GROUP_INITIAL_REBALANCE_DELAY_MS=0
+      - KAFKA_CFG_REQUEST_TIMEOUT_MS=60000 # Increase request timeout to 60 seconds
+      - KAFKA_CFG_CONNECTIONS_MAX_IDLE_MS=300000 # Increase idle connection timeout to 5 minutes
+      - KAFKA_CFG_REPLICA_FETCH_MAX_BYTES=10485760 # Increase fetch size to 10MB
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT_LOCAL:PLAINTEXT,PLAINTEXT_DOCKER:PLAINTEXT
+      - KAFKA_CFG_ZOOKEEPER_SESSION_TIMEOUT_MS=30000
+      - KAFKA_CFG_INTER_BROKER_LISTENER_NAME=PLAINTEXT_DOCKER
+    ports:
+      - "9092:9092"
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions.sh --bootstrap-server localhost:9092 || exit 1"]
+      interval: 20s # Reduce interval for quicker detection
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2048M
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+  zookeeper:
+    image: bitnami/zookeeper:latest
+    environment:
+      - ALLOW_ANONYMOUS_LOGIN=yes
+      - ZOO_SERVER_ID=1
+      - ZOO_TICK_TIME=2000
+      - ZOO_INIT_LIMIT=10
+      - ZOO_SYNC_LIMIT=5
+      - ZOO_MAX_CLIENT_CNXNS=60
+      - ZOO_AUTOPURGE_SNAP_RETAIN_COUNT=3
+      - ZOO_AUTOPURGE_PURGE_INTERVAL=0
+    ports:
+      - "2181:2181"
+    healthcheck:
+      test: ["CMD-SHELL", "zkServer.sh status"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: leadflowx
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
+
+  ingestion-api:
+    build: ./ingestion-api
+    ports:
+      - "8080:8080"
+    environment:
+      - DB_URL=postgresql://postgres:postgres@postgres:5432/leadflowx
+      - API_KEY=leadflowx-api-key-2025
+      - KAFKA_BROKER=kafka:9092
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+
+  verifier:
+    build: ./verifier
+    env_file:
+      - ./verifier/.env
+    environment:
+      - KAFKA_BROKER=kafka:9092
+      - KAFKA_RAW_TOPIC=lead.raw
+      - KAFKA_VERIFIED_TOPIC=lead.verified
+      - KAFKA_GROUP_ID=verifier-group
+    ports:
+      - "9090:9090"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Delaying startup to ensure Kafka is ready..."
+        sleep 30
+        exec /app/verifier
+
+  activepieces:
+    image: activepieces/activepieces:0.14.0
+    environment:
+      - AP_POSTGRES_DATABASE=leadflowx
+      - AP_POSTGRES_HOST=postgres
+      - AP_POSTGRES_PORT=5432
+      - AP_POSTGRES_USERNAME=postgres
+      - AP_POSTGRES_PASSWORD=postgres
+      - AP_REDIS_HOST=redis
+      - AP_REDIS_PORT=6379
+      - AP_ENCRYPTION_KEY=a651b5391e8f4510fffbc5059efb7566
+      - AP_JWT_SECRET=f19c14437da0ccf8c5a8229a95146f94
+      - AP_FRONTEND_URL=http://localhost:3001
+    ports:
+      - "3001:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
+
+  n8n:
+    image: n8nio/n8n:latest
+    restart: unless-stopped
+    environment:
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=admin
+      - N8N_BASIC_AUTH_PASSWORD=admin123
+      - N8N_HOST=localhost
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=leadflowx
+      - DB_POSTGRESDB_USER=postgres
+      - DB_POSTGRESDB_PASSWORD=postgres
+      - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
+    ports:
+      - "5678:5678"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - n8n_data:/home/node/.n8n
+
+  admin-ui:
+    build: ./admin-ui
+    ports:
+      - "3000:3000"
+    environment: {}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  auditor:
+    build: ./auditor
+    environment:
+      - KAFKA_BROKER=kafka:9092
+      - KAFKA_INPUT_TOPIC=lead.verified
+      - KAFKA_OUTPUT_TOPIC=lead.audit
+      - KAFKA_GROUP_ID=auditor-group
+      - PAGESPEED_API_KEY=${PAGESPEED_API_KEY:-your-api-key-here}
+      - METRICS_PORT=8081
+      - KAFKA_READER_TIMEOUT_MS=60000 # Increase reader timeout to 60 seconds
+      - KAFKA_READER_MAX_WAIT_MS=5000 # Increase max wait time to 5 seconds
+    ports:
+      - "8081:8081"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Delaying startup to ensure Kafka is ready..."
+        sleep 30
+        exec /app/auditor
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8081/health || exit 1"]
+      interval: 20s # Reduce interval for quicker detection
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+
+  qa-ui:
+    build: ./qa-ui
+    ports:
+      - "3002:3000"
+    environment:
+      - REACT_APP_API_URL=http://localhost:8080
+      - REACT_APP_WS_URL=ws://localhost:8080
+    depends_on:
+      - ingestion-api
+    restart: unless-stopped
+
+  scorer:
+    build: ./scorer
+    environment:
+      - DB_URL=postgresql://postgres:postgres@postgres:5432/leadflowx
+      - SCORING_WEIGHTS=page_speed:0.3,ssl_score:0.2,lead_quality:0.5
+      - LOG_LEVEL=INFO
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  kafka-init:
+    image: bitnami/kafka:3.3.2
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Waiting for Kafka to be ready..."
+        sleep 60
+        echo "Testing Kafka connectivity..."
+        kafka-topics.sh --list --bootstrap-server kafka:9092 || exit 1
+        echo "Creating Kafka topics..."
+        kafka-topics.sh --create --topic test.topic --bootstrap-server kafka:9092 --if-not-exists --partitions 1 --replication-factor 1 || exit 1
+        echo "Kafka topics created successfully!"
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics.sh --list --bootstrap-server kafka:9092 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  scraper-yelp:
+    build: ./scraper
+    container_name: leadflowx-scraper-yelp-1
+    env_file:
+      - .env
+    environment:
+      - SOURCE=yelp
+      - KAFKA_BROKER=kafka:9092
+      - KAFKA_TOPIC=lead.raw
+      - CAPSOLVER_KEY=${CAPSOLVER_KEY}
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: on-failure
+
+  scraper-etsy:
+    build: ./scraper
+    container_name: leadflowx-scraper-etsy-1
+    env_file:
+      - .env
+    environment:
+      - SOURCE=etsy
+      - KAFKA_BROKER=kafka:9092
+      - KAFKA_TOPIC=lead.raw
+      - CAPSOLVER_KEY=${CAPSOLVER_KEY}
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: on-failure
+
+  scraper-craigslist:
+    build: ./scraper
+    container_name: leadflowx-scraper-craigslist-1
+    env_file:
+      - .env
+    environment:
+      - SOURCE=craigslist
+      - KAFKA_BROKER=kafka:9092
+      - KAFKA_TOPIC=lead.raw
+      - CAPSOLVER_KEY=${CAPSOLVER_KEY}
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: on-failure
+
+  # Scraper API Service for external integrations
+  scraper-api:
+    build:
+      context: ./scraper
+      dockerfile: Dockerfile
+    image: leadflowx/scraper-api:latest
+    container_name: leadflowx-scraper-api
+    restart: unless-stopped
+    command: python main.py --api-server
+    environment:
+      - LOG_LEVEL=INFO
+      - KAFKA_BROKER=kafka:9092
+      - KAFKA_TOPIC=lead.raw
+      - CAPSOLVER_KEY=${CAPSOLVER_KEY}
+      - DB_URL=postgresql://postgres:postgres@postgres:5432/leadflowx
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./scraper:/app
+      - ./.env:/app/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  pgdata:
+  redisdata:
+  n8n_data:
