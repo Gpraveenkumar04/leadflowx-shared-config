@@ -24,27 +24,15 @@ volumes:
 
 services:
   postgres:
-    image: postgres:15
-    environment:
-      - POSTGRES_DB=${DB_NAME:-leadflowx}
-      - POSTGRES_USER=${DB_USER:-postgres}
-      - POSTGRES_PASSWORD=${DB_PASSWORD:-LeadFlowX_SecurePassword_2025!}
+    <<: *postgres-template
     ports:
       - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    networks:
-      - leadflowx-network
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-leadflowx}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
-    restart: unless-stopped
 
   kafka:
     image: bitnami/kafka:3.5
+    <<: *default-restart
+    <<: *default-logging
+    networks: *default-networks
     environment:
       - KAFKA_CFG_NODE_ID=0
       - KAFKA_CFG_PROCESS_ROLES=controller,broker
@@ -56,70 +44,48 @@ services:
       - "9092:9092"
     volumes:
       - kafka_data:/bitnami/kafka
-    networks:
-      - leadflowx-network
     healthcheck:
       test: ["CMD", "kafka-topics.sh", "--bootstrap-server", "localhost:9092", "--list"]
       interval: 30s
       timeout: 10s
       retries: 3
-    restart: unless-stopped
 
   redis:
-    image: redis:7-alpine
+    <<: *redis-template
     ports:
       - "6379:6379"
-    volumes:
-      - redis_data:/data
-    networks:
-      - leadflowx-network
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-    restart: unless-stopped
 
   prometheus:
-    image: prom/prometheus:latest
+    <<: *prometheus-template
     ports:
       - "9090:9090"
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
       - prometheus_data:/prometheus
-    networks:
-      - leadflowx-network
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
       - '--web.console.libraries=/etc/prometheus/console_libraries'
       - '--web.console.templates=/etc/prometheus/consoles'
-    restart: unless-stopped
 
   grafana:
-    image: grafana/grafana:latest
+    <<: *grafana-template
     ports:
       - "3001:3000"
-    environment:
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-leadflowx2025}
-      - GF_USERS_ALLOW_SIGN_UP=false
     volumes:
       - grafana_data:/var/lib/grafana
       - ./grafana/dashboards:/etc/grafana/provisioning/dashboards
-    networks:
-      - leadflowx-network
     depends_on:
       - prometheus
-    restart: unless-stopped
 
   jaeger:
     image: jaegertracing/all-in-one:latest
+    <<: *default-restart
+    <<: *default-logging
+    networks: *default-networks
     ports:
       - "16686:16686"  # Jaeger UI
       - "14268:14268"  # Jaeger collector HTTP
       - "6831:6831/udp"  # Jaeger agent UDP
-    networks:
-      - leadflowx-network
     environment:
       - COLLECTOR_OTLP_ENABLED=true
-    restart: unless-stopped
