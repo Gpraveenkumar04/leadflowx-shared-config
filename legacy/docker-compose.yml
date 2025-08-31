@@ -1,25 +1,61 @@
 version: '3.8'
 
+# Use external network reference
+networks:
+  leadflowx-network:
+    external: true
+
+# ====================================================
+# VOLUMES
+# ====================================================
+volumes:
+  postgres_data:
+    external: true
+    name: leadflowx_postgres_data
+  redis_data:
+    external: true
+    name: leadflowx_redis_data
+  kafka_data:
+    external: true
+    name: leadflowx_kafka_data
+  zookeeper_data:
+    external: true
+    name: leadflowx_zookeeper_data
+  prometheus_data:
+    external: true
+    name: leadflowx_prometheus_data
+  grafana_data:
+    external: true
+    name: leadflowx_grafana_data
+  jaeger_data:
+    driver: local
+  n8n_data:
+    driver: local
+  activepieces_data:
+    driver: local
+
 services:
   # ====================================================
   # INFRASTRUCTURE SERVICES
   # ====================================================
-  
+
   # PostgreSQL Database
   postgres:
     image: postgres:15-alpine
     container_name: leadflowx-postgres
     environment:
-      POSTGRES_DB: leadflowx
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      - POSTGRES_DB=${DB_NAME:-leadflowx}
+      - POSTGRES_USER=${DB_USER:-postgres}
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-LeadFlowX_SecurePassword_2025!}
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./migrations.sql:/docker-entrypoint-initdb.d/01-init.sql
+    networks:
+      - leadflowx-network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-leadflowx}"]
       interval: 10s
       timeout: 10s
       retries: 10
@@ -34,6 +70,8 @@ services:
       - "6379:6379"
     volumes:
       - redis_data:/data
+    networks:
+      - leadflowx-network
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -53,6 +91,8 @@ services:
       - "2181:2181"
     volumes:
       - zookeeper_data:/bitnami/zookeeper
+    networks:
+      - leadflowx-network
     healthcheck:
       test: ["CMD-SHELL", "echo ruok | nc localhost 2181"]
       interval: 10s
@@ -78,6 +118,8 @@ services:
       - "9092:9092"
     volumes:
       - kafka_data:/bitnami/kafka
+    networks:
+      - leadflowx-network
     depends_on:
       zookeeper:
         condition: service_healthy
@@ -98,10 +140,12 @@ services:
     build: ./scheduler
     container_name: leadflowx-scheduler
     environment:
-      - DB_URL=postgresql://postgres:postgres@postgres:5432/leadflowx
+      - DB_URL=${DB_URL}
       - KAFKA_BROKER=kafka:9093
       - KAFKA_TOPIC=scraping.jobs
       - SCHEDULE_INTERVAL=30
+    networks:
+      - leadflowx-network
     depends_on:
       postgres:
         condition: service_healthy
@@ -119,12 +163,14 @@ services:
       - KAFKA_BROKER=kafka:9093
       - KAFKA_INPUT_TOPIC=scraping.jobs
       - KAFKA_OUTPUT_TOPIC=lead.raw
-      - DB_URL=postgresql://postgres:postgres@postgres:5432/leadflowx
+      - DB_URL=${DB_URL}
       - CAPSOLVER_KEY=${CAPSOLVER_KEY}
+    networks:
+      - leadflowx-network
     depends_on:
       kafka:
         condition: service_healthy
-    restart: on-failure
+    restart: unless-stopped
 
   scraper-etsy:
     build: ./scraper
@@ -135,10 +181,12 @@ services:
       - KAFKA_INPUT_TOPIC=scraping.jobs
       - KAFKA_OUTPUT_TOPIC=lead.raw
       - CAPSOLVER_KEY=${CAPSOLVER_KEY}
+    networks:
+      - leadflowx-network
     depends_on:
       kafka:
         condition: service_healthy
-    restart: on-failure
+    restart: unless-stopped
 
   scraper-craigslist:
     build: ./scraper
@@ -149,10 +197,12 @@ services:
       - KAFKA_INPUT_TOPIC=scraping.jobs
       - KAFKA_OUTPUT_TOPIC=lead.raw
       - CAPSOLVER_KEY=${CAPSOLVER_KEY}
+    networks:
+      - leadflowx-network
     depends_on:
       kafka:
         condition: service_healthy
-    restart: on-failure
+    restart: unless-stopped
 
   scraper-google-maps:
     build: ./scraper
@@ -163,10 +213,12 @@ services:
       - KAFKA_INPUT_TOPIC=scraping.jobs
       - KAFKA_OUTPUT_TOPIC=lead.raw
       - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+    networks:
+      - leadflowx-network
     depends_on:
       kafka:
         condition: service_healthy
-    restart: on-failure
+    restart: unless-stopped
 
   scraper-yellowpages:
     build: ./scraper
@@ -177,10 +229,12 @@ services:
       - KAFKA_INPUT_TOPIC=scraping.jobs
       - KAFKA_OUTPUT_TOPIC=lead.raw
       - CAPSOLVER_KEY=${CAPSOLVER_KEY}
+    networks:
+      - leadflowx-network
     depends_on:
       kafka:
         condition: service_healthy
-    restart: on-failure
+    restart: unless-stopped
 
   scraper-linkedin:
     build: ./scraper
@@ -191,10 +245,12 @@ services:
       - KAFKA_INPUT_TOPIC=scraping.jobs
       - KAFKA_OUTPUT_TOPIC=lead.raw
       - CAPSOLVER_KEY=${CAPSOLVER_KEY}
+    networks:
+      - leadflowx-network
     depends_on:
       kafka:
         condition: service_healthy
-    restart: on-failure
+    restart: unless-stopped
 
   scraper-chamber:
     build: ./scraper
@@ -204,10 +260,12 @@ services:
       - KAFKA_BROKER=kafka:9093
       - KAFKA_INPUT_TOPIC=scraping.jobs
       - KAFKA_OUTPUT_TOPIC=lead.raw
+    networks:
+      - leadflowx-network
     depends_on:
       kafka:
         condition: service_healthy
-    restart: on-failure
+    restart: unless-stopped
 
   scraper-facebook:
     build: ./scraper
@@ -218,10 +276,12 @@ services:
       - KAFKA_INPUT_TOPIC=scraping.jobs
       - KAFKA_OUTPUT_TOPIC=lead.raw
       - CAPSOLVER_KEY=${CAPSOLVER_KEY}
+    networks:
+      - leadflowx-network
     depends_on:
       kafka:
         condition: service_healthy
-    restart: on-failure
+    restart: unless-stopped
 
   scraper-opendata:
     build: ./scraper
@@ -231,10 +291,12 @@ services:
       - KAFKA_BROKER=kafka:9093
       - KAFKA_INPUT_TOPIC=scraping.jobs
       - KAFKA_OUTPUT_TOPIC=lead.raw
+    networks:
+      - leadflowx-network
     depends_on:
       kafka:
         condition: service_healthy
-    restart: on-failure
+    restart: unless-stopped
 
   scraper-trade:
     build: ./scraper
@@ -244,10 +306,12 @@ services:
       - KAFKA_BROKER=kafka:9093
       - KAFKA_INPUT_TOPIC=scraping.jobs
       - KAFKA_OUTPUT_TOPIC=lead.raw
+    networks:
+      - leadflowx-network
     depends_on:
       kafka:
         condition: service_healthy
-    restart: on-failure
+    restart: unless-stopped
 
   scraper-reviews:
     build: ./scraper
@@ -257,10 +321,12 @@ services:
       - KAFKA_BROKER=kafka:9093
       - KAFKA_INPUT_TOPIC=scraping.jobs
       - KAFKA_OUTPUT_TOPIC=lead.raw
+    networks:
+      - leadflowx-network
     depends_on:
       kafka:
         condition: service_healthy
-    restart: on-failure
+    restart: unless-stopped
 
   scraper-whois:
     build: ./scraper
@@ -270,10 +336,12 @@ services:
       - KAFKA_BROKER=kafka:9093
       - KAFKA_INPUT_TOPIC=scraping.jobs
       - KAFKA_OUTPUT_TOPIC=lead.raw
+    networks:
+      - leadflowx-network
     depends_on:
       kafka:
         condition: service_healthy
-    restart: on-failure
+    restart: unless-stopped
 
   scraper-noweblist:
     build: ./scraper
@@ -283,10 +351,12 @@ services:
       - KAFKA_BROKER=kafka:9093
       - KAFKA_INPUT_TOPIC=scraping.jobs
       - KAFKA_OUTPUT_TOPIC=lead.raw
+    networks:
+      - leadflowx-network
     depends_on:
       kafka:
         condition: service_healthy
-    restart: on-failure
+    restart: unless-stopped
 
   scraper-classifieds:
     build: ./scraper
@@ -296,10 +366,12 @@ services:
       - KAFKA_BROKER=kafka:9093
       - KAFKA_INPUT_TOPIC=scraping.jobs
       - KAFKA_OUTPUT_TOPIC=lead.raw
+    networks:
+      - leadflowx-network
     depends_on:
       kafka:
         condition: service_healthy
-    restart: on-failure
+    restart: unless-stopped
 
   # 3. Deduplicator Service
   deduplicator:
@@ -309,8 +381,10 @@ services:
       - KAFKA_BROKER=kafka:9093
       - KAFKA_INPUT_TOPIC=lead.raw
       - KAFKA_OUTPUT_TOPIC=lead.deduplicated
-      - DB_URL=postgresql://postgres:postgres@postgres:5432/leadflowx
+      - DB_URL=${DB_URL}
       - DEDUP_ALGORITHM=fuzzy_matching
+    networks:
+      - leadflowx-network
     depends_on:
       postgres:
         condition: service_healthy
@@ -334,6 +408,8 @@ services:
       - MOBILE_CHECK_ENABLED=true
     ports:
       - "8081:8081"
+    networks:
+      - leadflowx-network
     depends_on:
       kafka:
         condition: service_healthy
@@ -349,11 +425,11 @@ services:
     image: activepieces/activepieces:0.14.0
     container_name: leadflowx-qa-workflow
     environment:
-      - AP_POSTGRES_DATABASE=leadflowx
+      - AP_POSTGRES_DATABASE=${DB_NAME:-leadflowx}
       - AP_POSTGRES_HOST=postgres
       - AP_POSTGRES_PORT=5432
-      - AP_POSTGRES_USERNAME=postgres
-      - AP_POSTGRES_PASSWORD=postgres
+      - AP_POSTGRES_USERNAME=${DB_USER:-postgres}
+      - AP_POSTGRES_PASSWORD=${DB_PASSWORD:-LeadFlowX_SecurePassword_2025!}
       - AP_REDIS_HOST=redis
       - AP_REDIS_PORT=6379
       - AP_ENCRYPTION_KEY=${AP_ENCRYPTION_KEY}
@@ -362,6 +438,8 @@ services:
       - AP_WEBHOOK_TIMEOUT_SECONDS=30
     ports:
       - "3001:3000"
+    networks:
+      - leadflowx-network
     depends_on:
       postgres:
         condition: service_healthy
@@ -376,10 +454,12 @@ services:
     build: ./scorer
     container_name: leadflowx-scorer
     environment:
-      - DB_URL=postgresql://postgres:postgres@postgres:5432/leadflowx
+      - DB_URL=${DB_URL}
       - CRON_SCHEDULE=0 2 * * *  # Run at 2 AM daily
       - SCORING_WEIGHTS=page_speed:0.3,ssl_score:0.2,lead_quality:0.5
       - BATCH_SIZE=1000
+    networks:
+      - leadflowx-network
     depends_on:
       postgres:
         condition: service_healthy
@@ -395,6 +475,8 @@ services:
       - ESPOCRM_URL=${ESPOCRM_URL}
       - ESPOCRM_API_KEY=${ESPOCRM_API_KEY}
       - SYNC_INTERVAL=300  # 5 minutes
+    networks:
+      - leadflowx-network
     depends_on:
       kafka:
         condition: service_healthy
@@ -411,6 +493,8 @@ services:
       - LISTMONK_PASSWORD=${LISTMONK_PASSWORD}
       - KAFKA_BROKER=kafka:9093
       - KAFKA_INPUT_TOPIC=lead.qualified
+    networks:
+      - leadflowx-network
     depends_on:
       kafka:
         condition: service_healthy
@@ -428,6 +512,8 @@ services:
       - WEBRTC_PORT=8443
     ports:
       - "8443:8443"
+    networks:
+      - leadflowx-network
     restart: unless-stopped
     profiles: ["dialer"]
 
@@ -441,6 +527,8 @@ services:
       - REACT_APP_ACTIVEPIECES_URL=http://localhost:3001
     ports:
       - "3000:3000"
+    networks:
+      - leadflowx-network
     depends_on:
       - ingestion-api
     restart: unless-stopped
@@ -450,11 +538,13 @@ services:
     build: ./config-service
     container_name: leadflowx-config-service
     environment:
-      - DB_URL=postgresql://postgres:postgres@postgres:5432/leadflowx
+      - DB_URL=${DB_URL}
       - REDIS_URL=redis://redis:6379
       - HOT_RELOAD_ENABLED=true
     ports:
       - "8082:8082"
+    networks:
+      - leadflowx-network
     depends_on:
       postgres:
         condition: service_healthy
@@ -472,6 +562,8 @@ services:
       - RETRY_ATTEMPTS=3
       - RETRY_DELAY=60  # 1 minute
       - ALERT_WEBHOOK=${ALERT_WEBHOOK_URL}
+    networks:
+      - leadflowx-network
     depends_on:
       kafka:
         condition: service_healthy
@@ -486,12 +578,14 @@ services:
     build: ./ingestion-api
     container_name: leadflowx-ingestion-api
     environment:
-      - DB_URL=postgresql://postgres:postgres@postgres:5432/leadflowx
+      - DB_URL=${DB_URL}
       - KAFKA_BROKER=kafka:9093
       - API_KEY=${API_KEY}
       - CORS_ORIGINS=http://localhost:3000,http://localhost:3002
     ports:
       - "8080:8080"
+    networks:
+      - leadflowx-network
     depends_on:
       postgres:
         condition: service_healthy
@@ -514,6 +608,8 @@ services:
       - KAFKA_OUTPUT_TOPIC=lead.verified
       - KAFKA_GROUP_ID=verifier-group
       - VERIFICATION_RULES=email,phone,website
+    networks:
+      - leadflowx-network
     depends_on:
       kafka:
         condition: service_healthy
@@ -540,6 +636,8 @@ services:
       - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
       - ./monitoring/prometheus/alert_rules.yml:/etc/prometheus/alert_rules.yml
       - prometheus_data:/prometheus
+    networks:
+      - leadflowx-network
     restart: unless-stopped
 
   # 13. Grafana (Dashboards)
@@ -548,7 +646,7 @@ services:
     container_name: leadflowx-grafana
     environment:
       - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=admin123
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-leadflowx2025}
       - GF_USERS_ALLOW_SIGN_UP=false
     ports:
       - "3003:3000"
@@ -556,6 +654,8 @@ services:
       - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
       - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources
       - grafana_data:/var/lib/grafana
+    networks:
+      - leadflowx-network
     depends_on:
       - prometheus
     restart: unless-stopped
@@ -579,6 +679,8 @@ services:
       - "9411:9411"    # Zipkin
     volumes:
       - jaeger_data:/tmp
+    networks:
+      - leadflowx-network
     restart: unless-stopped
 
   # ====================================================
@@ -592,17 +694,19 @@ services:
     environment:
       - N8N_BASIC_AUTH_ACTIVE=true
       - N8N_BASIC_AUTH_USER=admin
-      - N8N_BASIC_AUTH_PASSWORD=admin123
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_PASSWORD:-admin123}
       - DB_TYPE=postgresdb
       - DB_POSTGRESDB_HOST=postgres
       - DB_POSTGRESDB_PORT=5432
-      - DB_POSTGRESDB_DATABASE=leadflowx
-      - DB_POSTGRESDB_USER=postgres
-      - DB_POSTGRESDB_PASSWORD=postgres
+      - DB_POSTGRESDB_DATABASE=${DB_NAME:-leadflowx}
+      - DB_POSTGRESDB_USER=${DB_USER:-postgres}
+      - DB_POSTGRESDB_PASSWORD=${DB_PASSWORD:-LeadFlowX_SecurePassword_2025!}
     ports:
       - "5678:5678"
     volumes:
       - n8n_data:/home/node/.n8n
+    networks:
+      - leadflowx-network
     depends_on:
       postgres:
         condition: service_healthy
@@ -617,40 +721,11 @@ services:
       - REACT_APP_WS_URL=ws://localhost:8080
     ports:
       - "3002:3000"
+    networks:
+      - leadflowx-network
     depends_on:
       - ingestion-api
     restart: unless-stopped
-
-# ====================================================
-# VOLUMES
-# ====================================================
-volumes:
-  postgres_data:
-    driver: local
-  redis_data:
-    driver: local
-  kafka_data:
-    driver: local
-  zookeeper_data:
-    driver: local
-  prometheus_data:
-    driver: local
-  grafana_data:
-    driver: local
-  jaeger_data:
-    driver: local
-  n8n_data:
-    driver: local
-  activepieces_data:
-    driver: local
-
-# ====================================================
-# NETWORKS
-# ====================================================
-networks:
-  default:
-    name: leadflowx-network
-    driver: bridge
 
 # ====================================================
 # PROFILES FOR SELECTIVE DEPLOYMENT
